@@ -1,4 +1,5 @@
 "use strict";
+window.__APP_JS_VERSION = 3;  // cache-busting diagnostic
 const $ = (id) => document.getElementById(id);
 
 /* Official DeepSeek whale SVG path (injected by Python from assets/whale_path.txt). */
@@ -82,17 +83,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (a) a.close_panel();
   });
 
-  /* Bottom-right resize grip: drag to resize; Python clamps and persists. */
+  /* Bottom-right resize grip: native drag loop on the Python side
+     (GetCursorPos + GetAsyncKeyState), because JS mousemove stops firing
+     as soon as the cursor leaves the window — exactly where you need to
+     drag in order to grow the panel. */
   const grip = $("grip");
-  let dragging = false, lastSend = 0;
-  grip.addEventListener("mousedown", (e) => { dragging = true; e.preventDefault(); });
-  window.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    const now = Date.now();
-    if (now - lastSend < 60) return;   // throttle
-    lastSend = now;
+  if (grip) grip.addEventListener("mousedown", (e) => {
+    e.preventDefault();
     const a = api();
-    if (a) a.set_size(Math.round(e.clientX) + 8, Math.round(e.clientY) + 8);
+    if (a) a.begin_resize();
   });
-  window.addEventListener("mouseup", () => { dragging = false; });
 });

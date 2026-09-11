@@ -231,9 +231,73 @@ def toggle_panel(w) -> None:
         open_panel(w)
 
 
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def _grip_resize_loop() -> None:
+    """Boucle de redimensionnement natif : suit le curseur tant que le bouton
+    gauche est enfoncé, puis replace le panneau au bord et persiste la taille.
+    (Les mousemove JS ne sont plus délivrés dès que le curseur sort de la
+    fenêtre — exactement là où il faut aller pour l'agrandir.)"""
+    global PANEL_W, PANEL_H
+    user32 = ctypes.windll.user32
+    hwnd = find_hwnd(APP_TITLE)
+    if not hwnd:
+        return
+    try:
+        dpi = user32.GetDpiForWindow(hwnd)
+    except Exception:
+        dpi = 96
+    s = (dpi or 96) / 96.0
+    wa = work_area()
+    w_max = max(300, wa.right - wa.left - 20)
+    h_max = max(320, int((wa.bottom - wa.top - 24) / s))
+    pt = POINT()
+    t0 = time.monotonic()
+    user32.GetCursorPos(ctypes.byref(pt))
+    r = RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    # The JS bridge takes a moment to start this thread: wait (max 1 s) for
+    # the button to actually be down before tracking, so no drag is missed.
+    while not (user32.GetAsyncKeyState(0x01) & 0x8000):
+        if time.monotonic() - t0 > 1.0:
+            print("[resize] bouton jamais pressé", flush=True)
+            return
+        time.sleep(0.02)
+    # Where the cursor grabbed the corner: the corner then tracks the cursor
+    # exactly (no snap on grab).
+    off_x = pt.x - r.right
+    off_y = pt.y - r.bottom
+    print("[resize] grip drag start", flush=True)
+    while True:
+        if not (user32.GetAsyncKeyState(0x01) & 0x8000):  # VK_LBUTTON released
+            break
+        if time.monotonic() - t0 > 30:  # safety: never loop for more than 30 s
+            break
+        user32.GetCursorPos(ctypes.byref(pt))
+        r = RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        w = max(300, min(int((pt.x - off_x - r.left) / s),
+                         w_max, wa.right - r.left - 12))
+        h = max(320, min(int((pt.y - off_y - r.top) / s), h_max,
+                         int((wa.bottom - r.top - 12) / s)))
+        if w != PANEL_W or h != PANEL_H:
+            PANEL_W, PANEL_H = w, h
+            user32.SetWindowPos(hwnd, -2, r.left, r.top,
+                                int(w * s), int(h * s), 0x0010 | 0x0040)
+        time.sleep(0.025)
+    x, y = panel_origin()  # re-anchor bottom-right with the new size
+    user32.SetWindowPos(hwnd, -2, int(x * s), int(y * s),
+                        int(PANEL_W * s), int(PANEL_H * s), 0x0010 | 0x0040)
+    cfg = load_config()
+    cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
+    save_config(cfg)
+    print(f"[resize] final {PANEL_W}x{PANEL_H}", flush=True)
+
+
 def resize_panel_to(w, h) -> None:
-    """Resize from the UI grip (logical px), clamp to the screen, keep the
-    panel anchored to the bottom-right corner. Size is persisted on close."""
+    """Programmatic resize (tests / API): clamp, keep the bottom-right anchor."""
     global PANEL_W, PANEL_H
     try:
         hwnd = find_hwnd(APP_TITLE)
@@ -268,6 +332,14 @@ class Api:
             cfg = load_config()
             cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
             save_config(cfg)
+        return True
+
+    def begin_resize(self):
+        state.grip_calls = getattr(state, "grip_calls", 0) + 1
+        print("[api] begin_resize", flush=True)
+        # Native drag loop in a worker thread: it follows the real cursor even
+        # outside the window, until the left mouse button is released.
+        threading.Thread(target=_grip_resize_loop, daemon=True).start()
         return True
 
     def set_size(self, w, h):
@@ -384,7 +456,9 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           "whaleLen: document.getElementById('whalePath').getAttribute('d').length,"
                           "tz: document.getElementById('tzNote').textContent,"
                           "ver: document.getElementById('ver').textContent,"
-                          "preview: (window.__state||{}).preview})")
+                          "preview: (window.__state||{}).preview,"
+                          "jsVer: window.__APP_JS_VERSION||0,"
+                          "grip: !!document.getElementById('grip')})")
                     import re as _re
                     raw = w.evaluate_js(js)
                     d = json.loads(raw)
@@ -395,7 +469,8 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           and (d["bannerDisplay"] == "none") == want_banner_hidden
                           and d["whaleLen"] == 1974
                           and (("peak" in d["appClass"].split()) == ("×1.0" in d["chip"]))
-                          and (d["chip"].startswith("PREVIEW") == bool(d.get("preview"))))
+                          and (d["chip"].startswith("PREVIEW") == bool(d.get("preview")))
+                          and d.get("grip") is True and d.get("jsVer", 0) >= 3)
                     print("[selfcheck]", json.dumps(d, ensure_ascii=False),
                           "=> VERDICT:", "OK" if ok else "ECHEC", flush=True)
                     if ok and "--selftest" in sys.argv:
@@ -420,6 +495,18 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                         time.sleep(0.5)
                         print("[selftest] resize via poignée (pont JS) :",
                               "OK" if r_ok else f"ECHEC ({PANEL_W}x{PANEL_H})", flush=True)
+                        # Poignée : test du câblage mousedown → API. Les clics
+                        # souris synthétiques ne peuvent pas atteindre un
+                        # panneau non-topmost depuis cet environnement de test.
+                        before = getattr(state, "grip_calls", 0)
+                        w.evaluate_js(
+                            "document.getElementById('grip').dispatchEvent("
+                            "new MouseEvent('mousedown',{bubbles:true,cancelable:true}))")
+                        time.sleep(1.8)  # la boucle attend le bouton 1 s puis renonce
+                        g_ok = getattr(state, "grip_calls", 0) > before
+                        print("[selftest] poignée (câblage mousedown→API) :",
+                              "OK" if g_ok else "ECHEC", flush=True)
+                        resize_panel_to(372, 676)
                 except Exception as e:
                     print("[selfcheck] erreur:", repr(e), flush=True)
             real = period_at(now)
@@ -479,6 +566,20 @@ def make_menu():
 
 
 # --------------------------------------------------------------------------- main
+def _prepare_boot_page() -> Path:
+    """Copy of index.html with cache-busting query strings on css/js, so the
+    WebView never serves a stale UI after an update."""
+    src = WEB_DIR / "index.html"
+    stamp = "+".join(str(int(p.stat().st_mtime)) for p in
+                     (src, WEB_DIR / "app.js", WEB_DIR / "style.css"))
+    html = (src.read_text(encoding="utf-8")
+            .replace('href="style.css"', f'href="style.css?v={stamp}"')
+            .replace('src="app.js"', f'src="app.js?v={stamp}"'))
+    out = WEB_DIR / "_boot.html"
+    out.write_text(html, encoding="utf-8")
+    return out
+
+
 def main() -> None:
     global window, PANEL_H, PANEL_W
     if already_running():
@@ -509,9 +610,9 @@ def main() -> None:
     loaded = threading.Event()
     px, py = panel_origin()
     window = webview.create_window(
-        APP_TITLE, str(WEB_DIR / "index.html"),
+        APP_TITLE, str(_prepare_boot_page()),
         js_api=Api(), width=PANEL_W, height=PANEL_H, x=px, y=py,
-        frameless=True, hidden=True,
+        frameless=True, easy_drag=False, hidden=True,
         background_color="#0B0E17",
     )
     window.events.loaded += lambda: loaded.set()
