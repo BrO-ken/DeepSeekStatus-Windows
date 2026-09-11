@@ -30,7 +30,7 @@ VERSION = "1.0.0"
 MUTEX_NAME = "DeepSeekStatusWin_Mutex"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VAL = "DeepSeekStatusWin"
-JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+JOURS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 if getattr(sys, "frozen", False):
     BUNDLE = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -67,7 +67,8 @@ def config_file() -> Path:
     return base / "config.json"
 
 
-DEFAULTS = {"preview": None, "launch_at_login": False, "open_panel_on_start": False}
+DEFAULTS = {"preview": None, "launch_at_login": False, "open_panel_on_start": False,
+            "panel_w": None, "panel_h": None}
 
 
 def load_config() -> dict:
@@ -212,7 +213,7 @@ def _assert_geometry() -> None:
         SWP_NOACTIVATE = 0x0010
         SWP_SHOWWINDOW = 0x0040
         ctypes.windll.user32.SetWindowPos(
-            hwnd, -1, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
+            hwnd, -2, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
             SWP_NOACTIVATE | SWP_SHOWWINDOW)
         r = RECT()
         ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
@@ -230,12 +231,49 @@ def toggle_panel(w) -> None:
         open_panel(w)
 
 
+def resize_panel_to(w, h) -> None:
+    """Resize from the UI grip (logical px), clamp to the screen, keep the
+    panel anchored to the bottom-right corner. Size is persisted on close."""
+    global PANEL_W, PANEL_H
+    try:
+        hwnd = find_hwnd(APP_TITLE)
+        if not hwnd:
+            print("[resize] hwnd introuvable", flush=True)
+            return
+        try:
+            dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+        except Exception:
+            dpi = 96
+        s = (dpi or 96) / 96.0
+        wa = work_area()
+        w_max = max(300, int(wa.right - wa.left - 20))
+        h_max = max(320, int((wa.bottom - wa.top - 24) / s))
+        PANEL_W = max(300, min(int(w), w_max))
+        PANEL_H = max(320, min(int(h), h_max))
+        x, y = panel_origin()
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, -2, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
+            0x0010 | 0x0040)
+        print(f"[resize] -> {PANEL_W}x{PANEL_H} @ {x},{y}", flush=True)
+    except Exception as e:
+        print("[resize] erreur:", repr(e), flush=True)
+
+
 # ------------------------------------------------------------- API exposée au JS
 class Api:
     def close_panel(self):
         if window is not None:
             window.hide()
             state.panel_visible = False
+            cfg = load_config()
+            cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
+            save_config(cfg)
+        return True
+
+    def set_size(self, w, h):
+        print(f"[api] set_size({w},{h})", flush=True)
+        if window is not None:
+            resize_panel_to(w, h)
         return True
 
     def set_preview(self, mode):
@@ -266,7 +304,7 @@ def build_state(now: datetime) -> dict:
     bj = now.astimezone(BEIJING)
     nbj = nxt.astimezone(BEIJING)
     ddays = (nbj.date() - bj.date()).days
-    when = "aujourd'hui" if ddays == 0 else ("demain" if ddays == 1 else JOURS[nbj.weekday()])
+    when = "today" if ddays == 0 else ("tomorrow" if ddays == 1 else JOURS[nbj.weekday()])
     with state.lock:
         preview = state.preview
     shown = preview or real
@@ -279,13 +317,12 @@ def build_state(now: datetime) -> dict:
         "period": shown,
         "preview": preview,
         "isPeak": is_peak,
-        "chip": (("APERÇU · " if preview else "")
-                 + ("PLEIN TARIF" if is_peak else "HEURES CREUSES")
-                 + " · " + ("×1,0" if is_peak else "×0,5")),
+        "chip": (("PREVIEW · " if preview else "")
+                 + ("PEAK · ×1.0" if is_peak else "OFF-PEAK · ×0.5")),
         "countdown": cd,
-        "nextLabel": ("Prochain passage en heures creuses" if real == PEAK
-                      else "Prochain passage en plein tarif"),
-        "nextAt": f"{when} à {nbj:%H:%M} (heure de Pékin)",
+        "nextLabel": ("Next off-peak switch" if real == PEAK
+                      else "Next peak switch"),
+        "nextAt": f"{when} at {nbj:%H:%M} (Beijing time)",
         "blockPct": pct,
         "beijingClock": f"{bj:%H:%M:%S}",
         "beijingDate": f"{JOURS[bj.weekday()]} {bj:%d/%m}",
@@ -303,8 +340,8 @@ def tray_image(shown_period: str) -> Image.Image:
 
 
 def tooltip_for(real: str, countdown: str, nbj) -> str:
-    lbl = "Plein tarif ×1.0" if real == PEAK else "Heures creuses ×0.5"
-    return f"DeepSeek — {lbl} · {countdown} avant {nbj:%H:%M}"
+    lbl = "Peak ×1.0" if real == PEAK else "Off-peak ×0.5"
+    return f"DeepSeek — {lbl} · {countdown} until {nbj:%H:%M}"
 
 
 # --------------------------------------------------------------------- updater 1 Hz
@@ -357,8 +394,8 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           and d["bannerHidden"] is want_banner_hidden
                           and (d["bannerDisplay"] == "none") == want_banner_hidden
                           and d["whaleLen"] == 1974
-                          and (("peak" in d["appClass"].split()) == (d["chip"].find("PLEIN") >= 0))
-                          and (d["chip"].startswith("APERÇU") == bool(d.get("preview"))))
+                          and (("peak" in d["appClass"].split()) == ("×1.0" in d["chip"]))
+                          and (d["chip"].startswith("PREVIEW") == bool(d.get("preview"))))
                     print("[selfcheck]", json.dumps(d, ensure_ascii=False),
                           "=> VERDICT:", "OK" if ok else "ECHEC", flush=True)
                     if ok and "--selftest" in sys.argv:
@@ -370,6 +407,19 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                         time.sleep(1.0)
                         print("[selftest] fermeture via bouton JS :",
                               "OK" if closed else "ECHEC", flush=True)
+                        # Test du redimensionnement : direct puis via le pont JS.
+                        resize_panel_to(420, 600)
+                        time.sleep(0.5)
+                        d_ok = (PANEL_W == 420 and PANEL_H == 600)
+                        print("[selftest] resize direct :",
+                              "OK" if d_ok else f"ECHEC ({PANEL_W}x{PANEL_H})", flush=True)
+                        w.evaluate_js("pywebview.api.set_size(440, 640)")
+                        time.sleep(1.2)
+                        r_ok = (PANEL_W == 440 and PANEL_H == 640)
+                        resize_panel_to(372, 676)
+                        time.sleep(0.5)
+                        print("[selftest] resize via poignée (pont JS) :",
+                              "OK" if r_ok else f"ECHEC ({PANEL_W}x{PANEL_H})", flush=True)
                 except Exception as e:
                     print("[selfcheck] erreur:", repr(e), flush=True)
             real = period_at(now)
@@ -387,9 +437,9 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
 
 # ------------------------------------------------------------------- menu du tray
 def make_menu():
-    def on_toggle(icon_, item):
+    def on_show(icon_, item):
         if window is not None:
-            toggle_panel(window)
+            open_panel(window)
 
     def on_quit(icon_, item):
         try:
@@ -411,26 +461,26 @@ def make_menu():
         Api().set_launch_at_login(not state.launch_at_login)
 
     return pystray.Menu(
-        pystray.MenuItem("Ouvrir / masquer le panneau", on_toggle, default=True),
+        pystray.MenuItem("Show panel", on_show, default=True),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Aperçu", pystray.Menu(
-            pystray.MenuItem("Suivre l'heure réelle", prev(None), radio=True,
+        pystray.MenuItem("Preview", pystray.Menu(
+            pystray.MenuItem("Follow real time", prev(None), radio=True,
                              checked=lambda it: state.preview is None),
-            pystray.MenuItem("Plein tarif", prev(PEAK), radio=True,
+            pystray.MenuItem("Peak", prev(PEAK), radio=True,
                              checked=lambda it: state.preview == PEAK),
-            pystray.MenuItem("Heures creuses", prev(OFF), radio=True,
+            pystray.MenuItem("Off-peak", prev(OFF), radio=True,
                              checked=lambda it: state.preview == OFF),
         )),
-        pystray.MenuItem("Démarrer avec Windows", on_login,
+        pystray.MenuItem("Start with Windows", on_login,
                          checked=lambda it: state.launch_at_login),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quitter", on_quit),
+        pystray.MenuItem("Quit", on_quit),
     )
 
 
 # --------------------------------------------------------------------------- main
 def main() -> None:
-    global window, PANEL_H
+    global window, PANEL_H, PANEL_W
     if already_running():
         print("DeepSeek Status tourne déjà (instance unique).")
         return
@@ -445,23 +495,23 @@ def main() -> None:
                 state.preview = sys.argv[i + 1] if sys.argv[i + 1] in (PEAK, OFF) else None
 
     wa = work_area()
-    # DPI : sous Windows, pywebview travaille en pixels logiques ; la fenêtre
-    # physique = logique × échelle et doit tenir dans l'écran réel.
+    # DPI: pywebview works in logical pixels; the physical window must fit the screen.
     try:
         scale = ctypes.windll.user32.GetDpiForSystem() / 96.0
     except Exception:
         scale = 1.0
     if scale <= 0:
         scale = 1.0
-    PANEL_H = max(400, min(PANEL_H, int((wa.bottom - wa.top - 24) / scale)))
-    print(f"[dpi] échelle={scale} panneau={PANEL_W}x{PANEL_H}", flush=True)
+    PANEL_W = max(300, min(int(cfg.get("panel_w") or PANEL_W), int(wa.right - wa.left - 20)))
+    PANEL_H = max(320, min(int(cfg.get("panel_h") or PANEL_H), int((wa.bottom - wa.top - 24) / scale)))
+    print(f"[dpi] scale={scale} panel={PANEL_W}x{PANEL_H}", flush=True)
 
     loaded = threading.Event()
     px, py = panel_origin()
     window = webview.create_window(
         APP_TITLE, str(WEB_DIR / "index.html"),
         js_api=Api(), width=PANEL_W, height=PANEL_H, x=px, y=py,
-        frameless=True, on_top=True, hidden=True,
+        frameless=True, hidden=True,
         background_color="#0B0E17",
     )
     window.events.loaded += lambda: loaded.set()

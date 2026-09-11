@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 
-/* Chemin SVG officiel de la baleine (injecté par Python depuis assets/whale_path.txt). */
+/* Official DeepSeek whale SVG path (injected by Python from assets/whale_path.txt). */
 window.__setWhale = function (p) {
   $("whalePath").setAttribute("d", p);
 };
@@ -12,7 +12,7 @@ function buildWeek(week) {
   const col = $("dayCol");
   grid.innerHTML = "";
   col.innerHTML = "";
-  const days = ["L", "M", "M", "J", "V", "S", "D"];
+  const days = ["M", "T", "W", "T", "F", "S", "S"];
   week.forEach((row, d) => {
     const r = document.createElement("div");
     r.className = "crow";
@@ -31,7 +31,7 @@ function buildWeek(week) {
   weekBuilt = true;
 }
 
-/* État poussé chaque seconde par Python (source de vérité unique). */
+/* State pushed every second by Python (single source of truth). */
 window.__update = function (s) {
   window.__state = s;
   const app = $("app");
@@ -42,15 +42,15 @@ window.__update = function (s) {
   $("nextLabel").textContent = s.nextLabel;
   $("nextAt").textContent = s.nextAt;
   $("progressFill").style.width = s.blockPct + "%";
-  $("progressMeta").textContent = s.blockPct + " % du bloc en cours écoulé";
+  $("progressMeta").textContent = s.blockPct + "% of the current block elapsed";
   $("beijingClock").textContent = s.beijingClock;
   if (!weekBuilt) buildWeek(s.week);
   document.querySelectorAll("#weekGrid .cell.now").forEach((c) => c.classList.remove("now"));
   const cur = document.querySelector('#weekGrid .cell[data-d="' + s.curDay + '"][data-h="' + s.curHour + '"]');
   if (cur) cur.classList.add("now");
   $("tzNote").textContent = s.tzDifferent
-    ? "Décision toujours en heure de Pékin (≠ fuseau local)"
-    : "Fuseau local = heure de Pékin";
+    ? "Always decided in Beijing time (≠ local timezone)"
+    : "Local timezone = Beijing time";
   $("beijingDate").textContent = s.beijingDate;
   $("ver").textContent = "v" + s.version;
   document.querySelectorAll("#pills button").forEach((b) => {
@@ -63,6 +63,7 @@ window.__update = function (s) {
 
 document.addEventListener("DOMContentLoaded", () => {
   const api = () => (window.pywebview ? pywebview.api : null);
+
   $("closeBtn").addEventListener("click", () => { const a = api(); if (a) a.close_panel(); });
   $("exitPreview").addEventListener("click", () => { const a = api(); if (a) a.set_preview(""); });
   document.querySelectorAll("#pills button").forEach((b) =>
@@ -73,4 +74,25 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { const a = api(); if (a) a.close_panel(); }
   });
+
+  /* Hide the panel as soon as it loses focus: the tray whale keeps running
+     in the background and clicking it brings the panel back. */
+  window.addEventListener("blur", () => {
+    const a = api();
+    if (a) a.close_panel();
+  });
+
+  /* Bottom-right resize grip: drag to resize; Python clamps and persists. */
+  const grip = $("grip");
+  let dragging = false, lastSend = 0;
+  grip.addEventListener("mousedown", (e) => { dragging = true; e.preventDefault(); });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const now = Date.now();
+    if (now - lastSend < 60) return;   // throttle
+    lastSend = now;
+    const a = api();
+    if (a) a.set_size(Math.round(e.clientX) + 8, Math.round(e.clientY) + 8);
+  });
+  window.addEventListener("mouseup", () => { dragging = false; });
 });
