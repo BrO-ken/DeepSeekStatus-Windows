@@ -1,0 +1,10 @@
+venv/
+build/
+dist/
+__pycache__/
+*.spec
+*.log
+
+# Artefacts locaux de verification
+_panel*.png
+_ref_*.swift

@@ -1,0 +1,13 @@
+# Dépendances de DeepSeek Status pour Windows (Python 3.11)
+# numpy épinglé : les builds numpy >= 2 exigent des instructions CPU (X86_V2)
+# absentes de certaines VM ; 1.26.4 fonctionne partout.
+pywebview
+pystray
+pillow
+svglib
+reportlab
+svgpath2mpl
+matplotlib
+tzdata
+numpy==1.26.4
+pyinstaller

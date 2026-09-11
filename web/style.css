@@ -1,0 +1,154 @@
+:root{
+  --bg:#0B0E17;
+  --card:rgba(255,255,255,.045);
+  --border:rgba(255,255,255,.08);
+  --text:#E8ECF6;
+  --muted:#98A2B8;
+  --accent:#4D6BFE;
+  --accent-soft:rgba(77,107,254,.16);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(120% 90% at 85% -10%, #15224A 0%, transparent 55%),
+    radial-gradient(100% 70% at -10% 110%, #0F1A38 0%, transparent 50%),
+    var(--bg);
+  color:var(--text);
+  font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  font-size:13px;
+  overflow:hidden;
+  user-select:none;-webkit-user-select:none;
+}
+#app{display:flex;flex-direction:column;height:100vh;padding:10px 14px 8px}
+#app.peak{--wfill:#7D9BFF;--glow:rgba(77,107,254,.55);--chipbg:rgba(77,107,254,.16);--chipbd:rgba(77,107,254,.5)}
+#app.offpeak{--wfill:#8E99AE;--glow:rgba(140,150,170,.22);--chipbg:rgba(255,255,255,.07);--chipbd:rgba(255,255,255,.16)}
+
+/* ------------------------------------------------ en-tête / aquarium */
+#hero{position:relative;flex:0 0 auto}
+.scene{
+  position:relative;height:108px;border-radius:14px;overflow:hidden;
+  border:1px solid var(--border);
+  background:
+    radial-gradient(120% 140% at 50% 118%, var(--glow) 0%, transparent 62%),
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0));
+}
+.chip{
+  position:absolute;left:10px;top:10px;z-index:4;padding:5px 11px;border-radius:999px;
+  background:var(--chipbg);border:1px solid var(--chipbd);
+  font-size:11px;font-weight:600;letter-spacing:.5px;
+}
+#closeBtn{
+  position:absolute;right:0;top:0;z-index:5;width:26px;height:26px;border-radius:8px;
+  border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--muted);
+  cursor:pointer;font-size:12px;line-height:1;
+}
+#closeBtn:hover{color:#fff;background:rgba(255,255,255,.12)}
+
+.swimmer{position:absolute;left:0;right:0;bottom:22px;display:flex;justify-content:center}
+#whale{width:86px;fill:var(--wfill);filter:drop-shadow(0 0 16px var(--glow))}
+#app.peak .swimmer{animation:swim 5s ease-in-out infinite alternate}
+@keyframes swim{from{transform:translateX(-52px)}to{transform:translateX(52px)}}
+#app.peak #whale{animation:bob 2.5s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:rotate(-4deg) translateY(0)}50%{transform:rotate(5deg) translateY(-4px)}}
+#app.offpeak .swimmer{transform:translateY(3px)}
+#app.offpeak #whale{animation:breathe 4s ease-in-out infinite}
+@keyframes breathe{0%,100%{transform:rotate(-7deg) scale(1)}50%{transform:rotate(-7deg) scale(1.045)}}
+
+.bubbles i{
+  position:absolute;bottom:18px;width:7px;height:7px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, rgba(255,255,255,.85), rgba(125,155,255,.35));
+  opacity:0;display:none;
+}
+#app.peak .bubbles i{display:block;animation:rise 3.2s linear infinite}
+.bubbles i:nth-child(1){left:30%}
+.bubbles i:nth-child(2){left:38%;width:5px;height:5px;animation-delay:1.1s}
+.bubbles i:nth-child(3){left:47%;animation-delay:2.2s}
+.bubbles i:nth-child(4){left:24%;width:4px;height:4px;animation-delay:1.7s}
+@keyframes rise{0%{transform:translateY(0);opacity:0}15%{opacity:.9}100%{transform:translateY(-64px);opacity:0}}
+
+.zzz{position:absolute;right:64px;top:16px;width:44px;height:12px;display:none}
+#app.offpeak .zzz{display:block}
+.zzz span{position:absolute;left:0;top:0;color:var(--muted);font-weight:600;opacity:0;animation:zfloat 4.5s ease-in-out infinite}
+.zzz span:nth-child(2){animation-delay:1.5s;font-size:15px;margin-left:12px}
+.zzz span:nth-child(3){animation-delay:3s;font-size:12px;margin-left:24px}
+@keyframes zfloat{0%{transform:translate(0,0);opacity:0}20%{opacity:.9}100%{transform:translate(10px,-24px);opacity:0}}
+
+#previewBanner{
+  position:absolute;left:50%;transform:translateX(-50%);bottom:8px;z-index:4;
+  display:flex;gap:8px;align-items:center;
+  background:rgba(255,193,7,.14);border:1px solid rgba(255,193,7,.4);
+  color:#FFE49C;font-size:11px;padding:3px 10px;border-radius:999px;
+}
+#previewBanner[hidden]{display:none!important}
+#previewBanner button{background:transparent;border:none;color:#FFD966;cursor:pointer;font-size:11px;text-decoration:underline;font-family:inherit}
+
+/* ------------------------------------------------------- cartes */
+main{flex:1 1 auto;overflow:hidden}
+.card{
+  background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:11px 14px;margin-top:10px;
+}
+.row{display:flex;justify-content:space-between;align-items:baseline}
+.label{color:var(--muted);font-size:12px}
+.label small{opacity:.75}
+.clock{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px}
+.clock small{font-size:10px;opacity:.7}
+.big{
+  font-size:40px;font-weight:650;letter-spacing:.5px;line-height:1.18;
+  font-variant-numeric:tabular-nums;margin:1px 0;
+  background:linear-gradient(90deg,#FFFFFF,#B9C6FF);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+#app.offpeak .big{background:linear-gradient(90deg,#EDF1F8,#A9B4C8);-webkit-background-clip:text;background-clip:text}
+.sub{color:var(--muted);font-size:12px}
+.progress{height:6px;border-radius:99px;background:rgba(255,255,255,.08);margin:9px 0 5px;overflow:hidden}
+#progressFill{height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,#4D6BFE,#7D9BFF);transition:width 1s linear}
+.meta{color:var(--muted);font-size:11px}
+
+/* -------------------------------------------------- barres de prix */
+.price-row{display:grid;grid-template-columns:10px 104px 44px 1fr;gap:10px;align-items:center;margin:5px 0}
+.dot{width:8px;height:8px;border-radius:50%}
+.peak-dot{background:#4D6BFE;box-shadow:0 0 8px rgba(77,107,254,.8)}
+.off-dot{background:#8E99AE}
+.pname{font-size:12px}
+.mult{color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;font-size:12px}
+.bar{height:8px;background:rgba(255,255,255,.07);border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px}
+.bar-peak{background:linear-gradient(90deg,#4D6BFE,#7D9BFF)}
+.bar-off{background:#8E99AE}
+.hint{color:var(--muted);font-size:11px;margin-top:7px}
+
+/* ------------------------------------------------- heatmap hebdo */
+.weekwrap{display:grid;grid-template-columns:16px 1fr;gap:6px;margin-top:9px}
+#dayCol{display:grid;grid-template-rows:repeat(7,9px);gap:3px;color:var(--muted);font-size:9px;text-align:center;line-height:9px}
+#weekGrid{display:grid;grid-template-rows:repeat(7,9px);gap:3px}
+.crow{display:grid;grid-template-columns:repeat(24,1fr);gap:2px}
+.cell{height:9px;border-radius:2.5px;background:rgba(255,255,255,.07)}
+.cell.on{background:linear-gradient(180deg,#5D7AFE,#3E58E0)}
+.cell.now{outline:1.5px solid #fff;outline-offset:1px}
+.hours-row{display:flex;justify-content:space-between;margin:5px 0 0 22px;color:var(--muted);font-size:9px}
+.legend{margin-top:7px;color:var(--muted);font-size:11px;display:flex;align-items:center;gap:5px}
+.sw{width:10px;height:10px;border-radius:3px;display:inline-block}
+.sw-peak{background:#4D6BFE}
+.sw-off{background:rgba(255,255,255,.12)}
+
+/* ---------------------------------------------------- réglages */
+.pills{display:flex;gap:8px;margin:9px 0 11px}
+.pills button{
+  flex:1;padding:7px 0;border-radius:10px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);font-size:12px;cursor:pointer;font-family:inherit;
+}
+.pills button:hover{color:var(--text);border-color:rgba(255,255,255,.2)}
+.pills button.active{background:var(--accent-soft);border-color:rgba(77,107,254,.55);color:#DCE4FF}
+.toggle-row{display:flex;justify-content:space-between;align-items:center;padding-top:2px;font-size:12px}
+.toggle{position:relative;width:40px;height:22px;display:inline-block}
+.toggle input{opacity:0;position:absolute;inset:0;cursor:pointer;margin:0}
+.toggle i{position:absolute;inset:0;border-radius:999px;background:rgba(255,255,255,.12);transition:.2s;pointer-events:none}
+.toggle i::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.toggle input:checked + i{background:#4D6BFE}
+.toggle input:checked + i::after{transform:translateX(18px)}
+
+/* ------------------------------------------------------- pied */
+footer{margin-top:auto;padding-top:7px;color:var(--muted);font-size:11px;display:flex;gap:6px;align-items:center}
+footer .sep{opacity:.5}
