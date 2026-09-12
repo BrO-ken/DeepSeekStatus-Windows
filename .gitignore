@@ -8,3 +8,5 @@ __pycache__/
 # Artefacts locaux de verification
 _panel*.png
 _ref_*.swift
+_boot.html
+*.log
