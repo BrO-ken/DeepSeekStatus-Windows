@@ -27,7 +27,7 @@ from schedule import (BEIJING, OFF, PEAK, next_transition, period_at,
                       previous_boundary, progress, week_matrix)
 
 APP_TITLE = "DeepSeek Status"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 MUTEX_NAME = "DeepSeekStatusWin_Mutex"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VAL = "DeepSeekStatusWin"
