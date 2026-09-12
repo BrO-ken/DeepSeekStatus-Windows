@@ -30,8 +30,9 @@ Source: [api-docs.deepseek.com/quick_start/pricing](https://api-docs.deepseek.co
 - Panel (left-click the whale): animated aquarium (swimming / sleeping whale), giant countdown,
   progress through the current block, ×1.0 / ×0.5 price bars, **7×24 weekly heat map**,
   timezone note.
-- **Resizable panel**: drag the bottom-right grip; the size is clamped to the screen,
-  the panel stays anchored bottom-right, and the size is remembered across sessions.
+- **Resizable panel**: grab any edge or corner and drag — native live resizing
+  with no visible frame (the ◢ mark shows the diagonal spot). Minimum 300×320,
+  size remembered across sessions.
 - **Preview mode**: force the peak / off-peak display (never affects the real computation).
 - **Start with Windows** (opt-in, `HKCU\...\Run`).
 - The panel hides itself when it loses focus — the tray whale keeps running in the background.
@@ -42,7 +43,7 @@ Source: [api-docs.deepseek.com/quick_start/pricing](https://api-docs.deepseek.co
 - **Left-click** the whale: show the panel.
 - **Right-click**: preview, start with Windows, quit.
 - **Esc**, ✕, or clicking outside: hide the panel.
-- **Bottom-right grip**: drag to resize the panel.
+- **Any edge or corner**: drag to resize the panel live (◢ marks the diagonal spot).
 
 ## Run
 

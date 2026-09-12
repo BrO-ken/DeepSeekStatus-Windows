@@ -9,6 +9,7 @@ DeepSeek est en plein tarif ou en heures creuses, avec panneau de détails
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes as wt
 import json
 import os
 import sys
@@ -219,6 +220,7 @@ def _assert_geometry() -> None:
         ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
         print(f"[geometry] hwnd={hwnd} rect=({r.left},{r.top})-({r.right},{r.bottom}) dpi={dpi}", flush=True)
         polish_window(hwnd)
+        enable_native_resize()
     except Exception as e:
         print("[geometry]", repr(e), flush=True)
 
@@ -235,65 +237,190 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
-def _grip_resize_loop() -> None:
-    """Boucle de redimensionnement natif : suit le curseur tant que le bouton
-    gauche est enfoncé, puis replace le panneau au bord et persiste la taille.
-    (Les mousemove JS ne sont plus délivrés dès que le curseur sort de la
-    fenêtre — exactement là où il faut aller pour l'agrandir.)"""
-    global PANEL_W, PANEL_H
-    user32 = ctypes.windll.user32
-    hwnd = find_hwnd(APP_TITLE)
-    if not hwnd:
-        return
+_WCHR_T = ctypes.WINFUNCTYPE(ctypes.c_long, wt.HWND, ctypes.c_uint,
+                             wt.WPARAM, wt.LPARAM)
+_NCHITTEST_HOOKED = False
+_prev_wndproc = None
+_wndproc_cb = None
+
+
+class _I32(ctypes.c_int):
+    """c_int that also accepts None (→ 0). Required because prototypes are
+    process-global and pywebview itself passes None for SWP_NOSIZE
+    width/height in its move()/resize()."""
+    @classmethod
+    def from_param(cls, v):
+        return cls(0 if v is None else v)
+
+
+def _setup_win_prototypes() -> None:
+    """Mandatory on 64-bit Windows: without argtypes ctypes passes HWNDs as
+    32-bit ints (high bits undefined) and SetWindowPos & co. fail randomly
+    with ERROR_INVALID_WINDOW_HANDLE — geometry/drag/resize flakiness."""
+    u = ctypes.windll.user32
+    u.EnumWindows.argtypes = [ctypes.c_void_p, wt.LPARAM]
+    u.EnumWindows.restype = wt.BOOL
+    u.GetWindowTextLengthW.argtypes = [wt.HWND]
+    u.GetWindowTextLengthW.restype = ctypes.c_int
+    u.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, _I32]
+    u.GetWindowTextW.restype = ctypes.c_int
+    u.SetWindowPos.argtypes = [wt.HWND, wt.HWND, _I32, _I32, _I32, _I32, _I32]
+    u.SetWindowPos.restype = wt.BOOL
+    u.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(RECT)]
+    u.GetWindowRect.restype = wt.BOOL
+    u.GetWindowLongW.argtypes = [wt.HWND, _I32]
+    u.GetWindowLongW.restype = ctypes.c_long
+    u.SetWindowLongW.argtypes = [wt.HWND, _I32, ctypes.c_long]
+    u.SetWindowLongW.restype = ctypes.c_long
+    u.GetWindowLongPtrW.argtypes = [wt.HWND, _I32]
+    u.GetWindowLongPtrW.restype = ctypes.c_void_p
+    u.SetWindowLongPtrW.argtypes = [wt.HWND, _I32, ctypes.c_void_p]
+    u.SetWindowLongPtrW.restype = ctypes.c_void_p
+    u.CallWindowProcW.argtypes = [ctypes.c_void_p, wt.HWND,
+                                  ctypes.c_uint, wt.WPARAM, wt.LPARAM]
+    u.CallWindowProcW.restype = ctypes.c_long
+    u.GetDpiForWindow.argtypes = [wt.HWND]
+    u.GetDpiForWindow.restype = ctypes.c_uint
+    u.GetDpiForSystem.argtypes = []
+    u.GetDpiForSystem.restype = ctypes.c_uint
+    u.GetSystemMetrics.argtypes = [_I32]
+    u.GetSystemMetrics.restype = ctypes.c_int
+    u.SystemParametersInfoW.argtypes = [ctypes.c_uint, ctypes.c_uint,
+                                        ctypes.c_void_p, ctypes.c_uint]
+    u.SystemParametersInfoW.restype = wt.BOOL
+    u.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
+    u.GetCursorPos.restype = wt.BOOL
+    u.SetCursorPos.argtypes = [_I32, _I32]
+    u.SetCursorPos.restype = wt.BOOL
+    u.mouse_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+                              ctypes.c_uint, ctypes.c_ulonglong]
+    u.mouse_event.restype = None
+    k = ctypes.windll.kernel32
+    k.CreateMutexW.argtypes = [wt.LPVOID, wt.BOOL, wt.LPCWSTR]
+    k.CreateMutexW.restype = wt.HANDLE
+    k.GetLastError.argtypes = []
+    k.GetLastError.restype = wt.DWORD
+    d = ctypes.windll.dwmapi
+    d.DwmSetWindowAttribute.argtypes = [wt.HWND, wt.DWORD, ctypes.c_void_p, wt.DWORD]
+    d.DwmSetWindowAttribute.restype = ctypes.c_long
+
+
+_setup_win_prototypes()
+
+
+def _install_nchittest_hook(hwnd) -> bool:
+    """Invisible resize borders: answer WM_NCHITTEST ourselves (8 px edge
+    zones → HT sizing codes) so Windows resizes natively with zero visible
+    frame. Everything else is forwarded to the previous window proc."""
+    global _prev_wndproc, _wndproc_cb, _NCHITTEST_HOOKED
+    if _NCHITTEST_HOOKED:
+        return True
     try:
-        dpi = user32.GetDpiForWindow(hwnd)
-    except Exception:
-        dpi = 96
-    s = (dpi or 96) / 96.0
-    wa = work_area()
-    w_max = max(300, wa.right - wa.left - 20)
-    h_max = max(320, int((wa.bottom - wa.top - 24) / s))
-    pt = POINT()
-    t0 = time.monotonic()
-    user32.GetCursorPos(ctypes.byref(pt))
-    r = RECT()
-    user32.GetWindowRect(hwnd, ctypes.byref(r))
-    # The JS bridge takes a moment to start this thread: wait (max 1 s) for
-    # the button to actually be down before tracking, so no drag is missed.
-    while not (user32.GetAsyncKeyState(0x01) & 0x8000):
-        if time.monotonic() - t0 > 1.0:
-            print("[resize] bouton jamais pressé", flush=True)
+        u = ctypes.windll.user32
+        u.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        u.GetWindowLongPtrW.restype = ctypes.c_void_p
+        u.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        u.SetWindowLongPtrW.restype = ctypes.c_void_p
+        u.CallWindowProcW.argtypes = [ctypes.c_void_p, wt.HWND,
+                                      ctypes.c_uint, wt.WPARAM, wt.LPARAM]
+        u.CallWindowProcW.restype = ctypes.c_long
+        HT = {(1, 1): 13, (1, 0): 10, (1, -1): 16, (0, 1): 12,
+              (0, -1): 15, (-1, 1): 14, (-1, 0): 11, (-1, -1): 17}
+        M = 8
+
+        def _hook(hwnd_, msg, wp, lp):
+            if msg == 0x0084:  # WM_NCHITTEST
+                try:
+                    x = ctypes.c_short(lp & 0xFFFF).value
+                    y = ctypes.c_short((lp >> 16) & 0xFFFF).value
+                    r = RECT()
+                    u.GetWindowRect(hwnd_, ctypes.byref(r))
+                    hx = 1 if x - r.left < M else (-1 if r.right - x < M else 0)
+                    hy = 1 if y - r.top < M else (-1 if r.bottom - y < M else 0)
+                    if hx or hy:
+                        return HT.get((hx, hy), 1)
+                except Exception:
+                    pass
+                return 1  # HTCLIENT: clicks go to the page as before
+            return u.CallWindowProcW(_prev_wndproc, hwnd_, msg, wp, lp)
+
+        prev = u.GetWindowLongPtrW(hwnd, -4)
+        if not prev:
+            return False
+        _prev_wndproc = prev
+        _wndproc_cb = _WCHR_T(_hook)  # keep alive: never GC the proc
+        u.SetWindowLongPtrW(hwnd, -4, ctypes.cast(_wndproc_cb, ctypes.c_void_p))
+        _NCHITTEST_HOOKED = True
+        print("[nativeresize] nchittest hook ON", flush=True)
+        return True
+    except Exception as e:
+        print("[nativeresize] hook:", repr(e), flush=True)
+        return False
+
+
+def enable_native_resize() -> None:
+    """Free live resizing on every edge/corner with no visible frame: drop
+    WS_THICKFRAME (it paints a white-ish sizing border on a frameless
+    window), darken the form background, install the invisible hit-test
+    hook, and set a minimum size. Idempotent: safe to call on every open."""
+    try:
+        hwnd = find_hwnd(APP_TITLE)
+        if not hwnd:
             return
-        time.sleep(0.02)
-    # Where the cursor grabbed the corner: the corner then tracks the cursor
-    # exactly (no snap on grab).
-    off_x = pt.x - r.right
-    off_y = pt.y - r.bottom
-    print("[resize] grip drag start", flush=True)
-    while True:
-        if not (user32.GetAsyncKeyState(0x01) & 0x8000):  # VK_LBUTTON released
-            break
-        if time.monotonic() - t0 > 30:  # safety: never loop for more than 30 s
-            break
-        user32.GetCursorPos(ctypes.byref(pt))
+        GWL_STYLE, WS_THICKFRAME = -16, 0x00040000
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+        if style & WS_THICKFRAME:
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style & ~WS_THICKFRAME)
+            ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x37)
+        try:
+            dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+        except Exception:
+            dpi = 96
+        s = (dpi or 96) / 96.0
+        try:
+            import clr
+            clr.AddReference("System.Drawing")
+            from System.Drawing import Size, Color
+            if window is not None and getattr(window, "native", None) is not None:
+                window.native.MinimumSize = Size(int(300 * s), int(320 * s))
+                window.native.BackColor = Color.FromArgb(11, 14, 23)
+        except Exception as e:
+            print("[nativeresize] minsize/backcolor:", repr(e), flush=True)
+        _install_nchittest_hook(hwnd)
+    except Exception as e:
+        print("[nativeresize]", repr(e), flush=True)
+
+
+_last_size_save = 0.0
+
+
+def _sync_size_from_window() -> None:
+    """Native resize changes the real window directly: mirror it back into
+    PANEL_W/PANEL_H (logical px) and persist (throttled). Called 1×/s."""
+    global PANEL_W, PANEL_H, _last_size_save
+    try:
+        hwnd = find_hwnd(APP_TITLE)
+        if not hwnd:
+            return
         r = RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(r))
-        w = max(300, min(int((pt.x - off_x - r.left) / s),
-                         w_max, wa.right - r.left - 12))
-        h = max(320, min(int((pt.y - off_y - r.top) / s), h_max,
-                         int((wa.bottom - r.top - 12) / s)))
-        if w != PANEL_W or h != PANEL_H:
-            PANEL_W, PANEL_H = w, h
-            user32.SetWindowPos(hwnd, -2, r.left, r.top,
-                                int(w * s), int(h * s), 0x0010 | 0x0040)
-        time.sleep(0.025)
-    x, y = panel_origin()  # re-anchor bottom-right with the new size
-    user32.SetWindowPos(hwnd, -2, int(x * s), int(y * s),
-                        int(PANEL_W * s), int(PANEL_H * s), 0x0010 | 0x0040)
-    cfg = load_config()
-    cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
-    save_config(cfg)
-    print(f"[resize] final {PANEL_W}x{PANEL_H}", flush=True)
+        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
+        try:
+            dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+        except Exception:
+            dpi = 96
+        s = (dpi or 96) / 96.0
+        lw = int(round((r.right - r.left) / s))
+        lh = int(round((r.bottom - r.top) / s))
+        if abs(lw - PANEL_W) > 1 or abs(lh - PANEL_H) > 1:
+            PANEL_W, PANEL_H = lw, lh
+            if time.monotonic() - _last_size_save > 15:
+                _last_size_save = time.monotonic()
+                cfg = load_config()
+                cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
+                save_config(cfg)
+                print(f"[resize] synced {PANEL_W}x{PANEL_H}", flush=True)
+    except Exception as e:
+        print("[resize] sync:", repr(e), flush=True)
 
 
 def resize_panel_to(w, h) -> None:
@@ -332,14 +459,6 @@ class Api:
             cfg = load_config()
             cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
             save_config(cfg)
-        return True
-
-    def begin_resize(self):
-        state.grip_calls = getattr(state, "grip_calls", 0) + 1
-        print("[api] begin_resize", flush=True)
-        # Native drag loop in a worker thread: it follows the real cursor even
-        # outside the window, until the left mouse button is released.
-        threading.Thread(target=_grip_resize_loop, daemon=True).start()
         return True
 
     def set_size(self, w, h):
@@ -482,30 +601,32 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                         time.sleep(1.0)
                         print("[selftest] fermeture via bouton JS :",
                               "OK" if closed else "ECHEC", flush=True)
-                        # Test du redimensionnement : direct puis via le pont JS.
-                        resize_panel_to(420, 600)
-                        time.sleep(0.5)
-                        d_ok = (PANEL_W == 420 and PANEL_H == 600)
-                        print("[selftest] resize direct :",
-                              "OK" if d_ok else f"ECHEC ({PANEL_W}x{PANEL_H})", flush=True)
-                        w.evaluate_js("pywebview.api.set_size(440, 640)")
-                        time.sleep(1.2)
-                        r_ok = (PANEL_W == 440 and PANEL_H == 640)
-                        resize_panel_to(372, 676)
-                        time.sleep(0.5)
-                        print("[selftest] resize via poignée (pont JS) :",
-                              "OK" if r_ok else f"ECHEC ({PANEL_W}x{PANEL_H})", flush=True)
-                        # Poignée : test du câblage mousedown → API. Les clics
-                        # souris synthétiques ne peuvent pas atteindre un
-                        # panneau non-topmost depuis cet environnement de test.
-                        before = getattr(state, "grip_calls", 0)
-                        w.evaluate_js(
-                            "document.getElementById('grip').dispatchEvent("
-                            "new MouseEvent('mousedown',{bubbles:true,cancelable:true}))")
-                        time.sleep(1.8)  # la boucle attend le bouton 1 s puis renonce
-                        g_ok = getattr(state, "grip_calls", 0) > before
-                        print("[selftest] poignée (câblage mousedown→API) :",
-                              "OK" if g_ok else "ECHEC", flush=True)
+                        # Native resize: invisible hook + a real OS drag on the corner.
+                        enable_native_resize()
+                        hN = find_hwnd(APP_TITLE)
+                        stN = ctypes.windll.user32.GetWindowLongW(hN, -16)
+                        n_ok = _NCHITTEST_HOOKED and not (stN & 0x00040000)
+                        print("[selftest] resize cadre invisible :",
+                              "OK" if n_ok else f"ECHEC (style={stN:#x})", flush=True)
+                        # Hit-test deterministe (aucune souris requise : cette
+                        # session RDP n'a pas de foreground pour les clics
+                        # injectes). Le hook doit repondre HTBOTTOMRIGHT=17 au
+                        # coin, HTRIGHT=11 au bord, HTCLIENT=1 au centre.
+                        uN = ctypes.windll.user32
+                        uN.SendMessageW.argtypes = [wt.HWND, ctypes.c_uint,
+                                                    wt.WPARAM, wt.LPARAM]
+                        uN.SendMessageW.restype = ctypes.c_long
+                        rN0 = RECT()
+                        uN.GetWindowRect(hN, ctypes.byref(rN0))
+                        c17 = uN.SendMessageW(hN, 0x0084, 0,
+                                              ((rN0.bottom - 3) << 16) | (rN0.right - 3))
+                        c11 = uN.SendMessageW(hN, 0x0084, 0,
+                                              ((rN0.top + 200) << 16) | (rN0.right - 3))
+                        c01 = uN.SendMessageW(hN, 0x0084, 0,
+                                              ((rN0.top + 200) << 16) | (rN0.left + 200))
+                        grew = (c17, c11, c01) == (17, 11, 1)
+                        print("[selftest] hit-test natif (17/11/1) :",
+                              "OK" if grew else f"ECHEC ({c17}/{c11}/{c01})", flush=True)
                         resize_panel_to(372, 676)
                 except Exception as e:
                     print("[selfcheck] erreur:", repr(e), flush=True)
@@ -517,6 +638,7 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                 icon.icon = tray_image(preview or real)
                 last_icon_key = key
             icon.title = tooltip_for(real, s["countdown"], next_transition(now).astimezone(BEIJING))
+            _sync_size_from_window()
         except Exception as e:
             print("[updater]", repr(e), flush=True)
         time.sleep(1.0)
