@@ -83,7 +83,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (a) a.close_panel();
   });
 
-  /* The ◢ grip is a visual hint: resizing itself is native and borderless
-     (custom WM_NCHITTEST hook), so every edge and corner resizes live with
-     instant feedback — grab the corner right here and drag. */
+  /* The ◢ grip starts a page-driven resize (Python tracks the real cursor,
+     so it works in and outside the window with live feedback). The 8 px
+     window bands stay native-only on purpose: a single driver at a time. */
+  const grip = $("grip");
+  if (grip) grip.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const a = api();
+    if (a) a.begin_resize();
+  });
 });

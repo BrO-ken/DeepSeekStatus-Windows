@@ -214,7 +214,7 @@ def _assert_geometry() -> None:
         SWP_NOACTIVATE = 0x0010
         SWP_SHOWWINDOW = 0x0040
         ctypes.windll.user32.SetWindowPos(
-            hwnd, -2, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
+            hwnd, -1, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
             SWP_NOACTIVATE | SWP_SHOWWINDOW)
         r = RECT()
         ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
@@ -327,10 +327,10 @@ def _install_nchittest_hook(hwnd) -> bool:
         HT = {(1, 1): 13, (1, 0): 10, (1, -1): 16, (0, 1): 12,
               (0, -1): 15, (-1, 1): 14, (-1, 0): 11, (-1, -1): 17}
         M = 8
-        # Classic size-grip rect: the visible ◢ sits ~15 px inside the window,
-        # past the 8 px edge band (and the extreme rounded tip can be
-        # click-through) — so the whole corner answers HTBOTTOMRIGHT.
-        GRIP_W, GRIP_H = 36, 30
+        # NOTE: no enlarged grip rect here on purpose. The visible grip glyph
+        # is driven by the page (mousedown -> begin_resize -> tracking loop)
+        # while these 8 px bands stay native-only: the two mechanisms must
+        # never control the window at the same time.
 
         def _hook(hwnd_, msg, wp, lp):
             if msg == 0x0084:  # WM_NCHITTEST
@@ -339,8 +339,6 @@ def _install_nchittest_hook(hwnd) -> bool:
                     y = ctypes.c_short((lp >> 16) & 0xFFFF).value
                     r = RECT()
                     u.GetWindowRect(hwnd_, ctypes.byref(r))
-                    if x > r.right - GRIP_W and y > r.bottom - GRIP_H:
-                        return 17  # HTBOTTOMRIGHT: the visible grip
                     hx = 1 if x - r.left < M else (-1 if r.right - x < M else 0)
                     hy = 1 if y - r.top < M else (-1 if r.bottom - y < M else 0)
                     if hx or hy:
@@ -348,6 +346,11 @@ def _install_nchittest_hook(hwnd) -> bool:
                 except Exception:
                     pass
                 return 1  # HTCLIENT: clicks go to the page as before
+            if msg == 0x00A1:  # WM_NCLBUTTONDOWN: log who starts a drag
+                try:
+                    print(f"[nc] press wp={int(wp)}", flush=True)
+                except Exception:
+                    pass
             return u.CallWindowProcW(_prev_wndproc, hwnd_, msg, wp, lp)
 
         prev = u.GetWindowLongPtrW(hwnd, -4)
@@ -357,7 +360,7 @@ def _install_nchittest_hook(hwnd) -> bool:
         _wndproc_cb = _WCHR_T(_hook)  # keep alive: never GC the proc
         u.SetWindowLongPtrW(hwnd, -4, ctypes.cast(_wndproc_cb, ctypes.c_void_p))
         _NCHITTEST_HOOKED = True
-        print("[nativeresize] nchittest hook ON", flush=True)
+        print(f"[nativeresize] nchittest hook ON (hwnd={hwnd})", flush=True)
         return True
     except Exception as e:
         print("[nativeresize] hook:", repr(e), flush=True)
@@ -429,6 +432,63 @@ def _sync_size_from_window() -> None:
         print("[resize] sync:", repr(e), flush=True)
 
 
+def _track_loop() -> None:
+    """Grip tracking loop (started by the page's mousedown on the visible ◢).
+    Follows the REAL cursor with SetWindowPos while the left button is held,
+    then persists. Top-left stays put (no re-anchor jump). Works in and out
+    of the window; the 8 px native bands are a separate, non-conflicting path.
+    """
+    global PANEL_W, PANEL_H
+    user32 = ctypes.windll.user32
+    hwnd = find_hwnd(APP_TITLE)
+    if not hwnd:
+        return
+    try:
+        dpi = user32.GetDpiForWindow(hwnd)
+    except Exception:
+        dpi = 96
+    s = (dpi or 96) / 96.0
+    wa = work_area()
+    w_max = max(300, wa.right - wa.left - 20)
+    h_max = max(320, int((wa.bottom - wa.top - 24) / s))
+    pt = POINT()
+    t0 = time.monotonic()
+    user32.GetCursorPos(ctypes.byref(pt))
+    r = RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    # The JS bridge starts this thread late: wait (max 5 s) for the button to
+    # actually be down (a real user drag holds it for seconds).
+    while not (user32.GetAsyncKeyState(0x01) & 0x8000):
+        if time.monotonic() - t0 > 5.0:
+            return
+        time.sleep(0.02)
+    # Grab offset so the corner tracks the cursor with no snap.
+    off_x = pt.x - r.right
+    off_y = pt.y - r.bottom
+    print("[resize] grip drag start", flush=True)
+    while True:
+        if not (user32.GetAsyncKeyState(0x01) & 0x8000):  # released
+            break
+        if time.monotonic() - t0 > 30:  # safety
+            break
+        user32.GetCursorPos(ctypes.byref(pt))
+        rr = RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rr))
+        w = max(300, min(int((pt.x - off_x - rr.left) / s),
+                         w_max, wa.right - rr.left - 12))
+        h = max(320, min(int((pt.y - off_y - rr.top) / s), h_max,
+                         int((wa.bottom - rr.top - 12) / s)))
+        if w != PANEL_W or h != PANEL_H:
+            PANEL_W, PANEL_H = w, h
+            user32.SetWindowPos(hwnd, -1, rr.left, rr.top,
+                                int(w * s), int(h * s), 0x0010 | 0x0040)
+        time.sleep(0.025)
+    cfg = load_config()
+    cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
+    save_config(cfg)
+    print(f"[resize] grip final {PANEL_W}x{PANEL_H}", flush=True)
+
+
 def resize_panel_to(w, h) -> None:
     """Programmatic resize (tests / API): clamp, keep the bottom-right anchor."""
     global PANEL_W, PANEL_H
@@ -449,7 +509,7 @@ def resize_panel_to(w, h) -> None:
         PANEL_H = max(320, min(int(h), h_max))
         x, y = panel_origin()
         ctypes.windll.user32.SetWindowPos(
-            hwnd, -2, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
+            hwnd, -1, int(x * s), int(y * s), int(PANEL_W * s), int(PANEL_H * s),
             0x0010 | 0x0040)
         print(f"[resize] -> {PANEL_W}x{PANEL_H} @ {x},{y}", flush=True)
     except Exception as e:
@@ -465,6 +525,13 @@ class Api:
             cfg = load_config()
             cfg["panel_w"], cfg["panel_h"] = PANEL_W, PANEL_H
             save_config(cfg)
+        return True
+
+    def begin_resize(self):
+        # Page-driven grip drag: worker thread follows the real cursor
+        # (even outside the window) until the button is released.
+        state.grip_calls = getattr(state, "grip_calls", 0) + 1
+        threading.Thread(target=_track_loop, daemon=True).start()
         return True
 
     def set_size(self, w, h):
@@ -614,10 +681,8 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                         n_ok = _NCHITTEST_HOOKED and not (stN & 0x00040000)
                         print("[selftest] resize cadre invisible :",
                               "OK" if n_ok else f"ECHEC (style={stN:#x})", flush=True)
-                        # Hit-test deterministe (aucune souris requise : cette
-                        # session RDP n'a pas de foreground pour les clics
-                        # injectes). Le hook doit repondre HTBOTTOMRIGHT=17 au
-                        # coin, HTRIGHT=11 au bord, HTCLIENT=1 au centre.
+                        # Native 8 px bands still answer (17/11/1); the visible ◢
+                        # grip is page-driven (mousedown -> begin_resize).
                         uN = ctypes.windll.user32
                         uN.SendMessageW.argtypes = [wt.HWND, ctypes.c_uint,
                                                     wt.WPARAM, wt.LPARAM]
@@ -630,12 +695,17 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                                               ((rN0.top + 200) << 16) | (rN0.right - 3))
                         c01 = uN.SendMessageW(hN, 0x0084, 0,
                                               ((rN0.top + 200) << 16) | (rN0.left + 200))
-                        # On the visible ◢ glyph itself (inside the window).
-                        cGrip = uN.SendMessageW(hN, 0x0084, 0,
-                                                ((rN0.bottom - 16) << 16) | (rN0.right - 20))
-                        grew = (c17, c11, c01, cGrip) == (17, 11, 1, 17)
-                        print("[selftest] hit-test natif (17/11/1/17-grip) :",
-                              "OK" if grew else f"ECHEC ({c17}/{c11}/{c01}/{cGrip})", flush=True)
+                        band_ok = (c17, c11, c01) == (17, 11, 1)
+                        print("[selftest] hit-test bandes (17/11/1) :",
+                              "OK" if band_ok else f"ECHEC ({c17}/{c11}/{c01})", flush=True)
+                        n_before = getattr(state, "grip_calls", 0)
+                        w.evaluate_js(
+                            "document.getElementById('grip').dispatchEvent("
+                            "new MouseEvent('mousedown',{bubbles:true,cancelable:true}))")
+                        time.sleep(6.5)  # the loop waits 5 s for a button, then exits
+                        g_ok = getattr(state, "grip_calls", 0) > n_before
+                        print("[selftest] poignee (mousedown→begin_resize) :",
+                              "OK" if g_ok else "ECHEC", flush=True)
                         resize_panel_to(372, 676)
                 except Exception as e:
                     print("[selfcheck] erreur:", repr(e), flush=True)
@@ -648,6 +718,18 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                 last_icon_key = key
             icon.title = tooltip_for(real, s["countdown"], next_transition(now).astimezone(BEIJING))
             _sync_size_from_window()
+            # Hermes (fullscreen) keeps burying the panel: re-assert TOPMOST
+            # every second while visible. Blur-hide still hides it the moment
+            # the user clicks elsewhere, so it never blocks other apps.
+            if state.panel_visible:
+                try:
+                    _hwnd_top = find_hwnd(APP_TITLE)
+                    if _hwnd_top:
+                        # 0x53 = NOSIZE|NOMOVE|NOACTIVATE|SHOWWINDOW (surtout
+                        # PAS de SWP_NOZORDER : il ferait ignorer le TOPMOST).
+                        ctypes.windll.user32.SetWindowPos(_hwnd_top, -1, 0, 0, 0, 0, 0x0053)
+                except Exception:
+                    pass
         except Exception as e:
             print("[updater]", repr(e), flush=True)
         time.sleep(1.0)
@@ -743,7 +825,10 @@ def main() -> None:
     window = webview.create_window(
         APP_TITLE, str(_prepare_boot_page()),
         js_api=Api(), width=PANEL_W, height=PANEL_H, x=px, y=py,
-        frameless=True, easy_drag=False, hidden=True,
+        # Topmost while open (like the macOS statusBar panel): Hermes is a
+        # topmost window and would otherwise bury the panel so no click ever
+        # reaches it. Clicking anywhere else blurs -> the panel hides itself.
+        frameless=True, easy_drag=False, shadow=False, on_top=True, hidden=True,
         background_color="#0B0E17",
     )
     window.events.loaded += lambda: loaded.set()
