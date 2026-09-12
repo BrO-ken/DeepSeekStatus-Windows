@@ -1,5 +1,9 @@
 # 🐳 DeepSeek Status for Windows 11
 
+> **Download:** get `DeepSeekStatus.exe` from the
+> [latest release](https://github.com/BrO-ken/DeepSeekStatus-Windows/releases/latest) —
+> single file, no install, no Python needed. Or run from source (see below).
+
 Windows adaptation of [DeepSeekStatus](https://github.com/owenzhao/DeepSeekStatus) (macOS, MIT © Zhao Xin):
 a whale living in your **system tray** that tells you at a glance whether DeepSeek API is in
 **peak** (awake blue whale) or **off-peak** (sleepy gray whale) pricing, with a dark Fluent-style
