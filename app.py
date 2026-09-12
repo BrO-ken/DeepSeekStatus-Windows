@@ -327,6 +327,10 @@ def _install_nchittest_hook(hwnd) -> bool:
         HT = {(1, 1): 13, (1, 0): 10, (1, -1): 16, (0, 1): 12,
               (0, -1): 15, (-1, 1): 14, (-1, 0): 11, (-1, -1): 17}
         M = 8
+        # Classic size-grip rect: the visible ◢ sits ~15 px inside the window,
+        # past the 8 px edge band (and the extreme rounded tip can be
+        # click-through) — so the whole corner answers HTBOTTOMRIGHT.
+        GRIP_W, GRIP_H = 36, 30
 
         def _hook(hwnd_, msg, wp, lp):
             if msg == 0x0084:  # WM_NCHITTEST
@@ -335,6 +339,8 @@ def _install_nchittest_hook(hwnd) -> bool:
                     y = ctypes.c_short((lp >> 16) & 0xFFFF).value
                     r = RECT()
                     u.GetWindowRect(hwnd_, ctypes.byref(r))
+                    if x > r.right - GRIP_W and y > r.bottom - GRIP_H:
+                        return 17  # HTBOTTOMRIGHT: the visible grip
                     hx = 1 if x - r.left < M else (-1 if r.right - x < M else 0)
                     hy = 1 if y - r.top < M else (-1 if r.bottom - y < M else 0)
                     if hx or hy:
@@ -624,9 +630,12 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                                               ((rN0.top + 200) << 16) | (rN0.right - 3))
                         c01 = uN.SendMessageW(hN, 0x0084, 0,
                                               ((rN0.top + 200) << 16) | (rN0.left + 200))
-                        grew = (c17, c11, c01) == (17, 11, 1)
-                        print("[selftest] hit-test natif (17/11/1) :",
-                              "OK" if grew else f"ECHEC ({c17}/{c11}/{c01})", flush=True)
+                        # On the visible ◢ glyph itself (inside the window).
+                        cGrip = uN.SendMessageW(hN, 0x0084, 0,
+                                                ((rN0.bottom - 16) << 16) | (rN0.right - 20))
+                        grew = (c17, c11, c01, cGrip) == (17, 11, 1, 17)
+                        print("[selftest] hit-test natif (17/11/1/17-grip) :",
+                              "OK" if grew else f"ECHEC ({c17}/{c11}/{c01}/{cGrip})", flush=True)
                         resize_panel_to(372, 676)
                 except Exception as e:
                     print("[selfcheck] erreur:", repr(e), flush=True)
