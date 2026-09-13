@@ -752,6 +752,17 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                         print("[selftest] poignee (mousedown→begin_resize) :",
                               "OK" if g_ok else "ECHEC", flush=True)
                         resize_panel_to(372, 676)
+                        # Balance vault round-trip INSIDE the (frozen) app:
+                        # proves the Credential Manager backend works there.
+                        from balance import load_api_key as _lk
+                        store.set_key("sk-dummy-selftest")
+                        time.sleep(1.0)
+                        v_ok = _lk() == "sk-dummy-selftest"
+                        store.remove_key()
+                        time.sleep(0.3)
+                        v_clean = _lk() is None
+                        print("[selftest] coffre (set/load/remove) :",
+                              "OK" if (v_ok and v_clean) else f"ECHEC (found={v_ok}, cleaned={v_clean})", flush=True)
                 except Exception as e:
                     print("[selfcheck] erreur:", repr(e), flush=True)
             real = period_at(now)
@@ -880,6 +891,14 @@ def _prepare_boot_page() -> Path:
 
 def main() -> None:
     global window, PANEL_H, PANEL_W
+    if "--selftest" in sys.argv:
+        # windowed exe has no console: mirror diagnostics to a file
+        try:
+            _fh = open(APP_DIR / "selftest.log", "a", encoding="utf-8", errors="replace")
+            sys.stdout = _fh
+            sys.stderr = _fh
+        except Exception:
+            pass
     if already_running():
         print("DeepSeek Status tourne déjà (instance unique).")
         return
