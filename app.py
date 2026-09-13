@@ -39,6 +39,14 @@ if getattr(sys, "frozen", False):
 else:
     BUNDLE = Path(__file__).resolve().parent
     APP_DIR = BUNDLE
+
+# Diagnostics must never kill a thread over encoding (cp1252 console can't
+# print '≠'): replace undisplayable chars instead of raising.
+try:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except Exception:
+    pass
 ASSETS = BUNDLE / "assets"
 WEB_DIR = BUNDLE / "web"
 
