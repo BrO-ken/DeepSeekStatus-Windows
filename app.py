@@ -653,7 +653,7 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                     w.load_url(str(_prepare_boot_page()))
                 except Exception as e:
                     _dbg(f"watchdog reload: {e!r}")
-            if not selfcheck_done and state.panel_visible:
+            if not selfcheck_done and state.panel_visible and state.last_pull:
                 selfcheck_done = True
                 try:
                     js = ("JSON.stringify({"
