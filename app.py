@@ -55,6 +55,7 @@ class State:
         self.preview: str | None = None
         self.launch_at_login = False
         self.panel_visible = False
+        self.last_pull = 0.0  # heartbeat: last get_state() call from the page
 
 
 state = State()
@@ -187,6 +188,8 @@ def panel_origin() -> tuple[int, int]:
 def open_panel(w) -> None:
     x, y = panel_origin()
     w.show()
+    # Fresh heartbeat: avoid a bogus watchdog reload on the first seconds open.
+    state.last_pull = time.monotonic()
     # pywebview n'applique resize/move correctement qu'une fois la fenêtre montrée.
     try:
         w.events.shown.wait(5)
@@ -516,8 +519,17 @@ def resize_panel_to(w, h) -> None:
         print("[resize] erreur:", repr(e), flush=True)
 
 
-# ------------------------------------------------------------- API exposée au JS
+# ------------------------------------------------------------- API expose au JS
 class Api:
+    def get_state(self):
+        """Pulled by the page every second (replaces the old per-second
+        evaluate_js push, which could deadlock the updater)."""
+        state.last_pull = time.monotonic()
+        return build_state(datetime.now(timezone.utc))
+
+    def get_whale(self):
+        return WHALE_PATH
+
     def close_panel(self):
         if window is not None:
             window.hide()
@@ -612,25 +624,27 @@ def tooltip_for(real: str, countdown: str, nbj) -> str:
 def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
     loaded.wait(20)
     try:
-        w.evaluate_js("window.__setWhale(" + json.dumps(WHALE_PATH) + ")")
+        _js(w, "window.__setWhale(" + json.dumps(WHALE_PATH) + ")", timeout=3)
     except Exception as e:
-        print("[updater] setWhale:", repr(e), flush=True)
+        _dbg(f"setWhale: {e!r}")
     if open_now:
         open_panel(w)
-        try:
-            geo = w.evaluate_js(
-                "window.outerWidth + 'x' + window.outerHeight"
-                + " + ' @ ' + window.screenX + ',' + window.screenY")
-            print("[panel] géométrie:", geo, flush=True)
-        except Exception as e:
-            print("[panel] diag:", repr(e), flush=True)
     last_icon_key = None
     selfcheck_done = False
     while True:
         try:
             now = datetime.now(timezone.utc)
             s = build_state(now)
-            w.evaluate_js("window.__update(" + json.dumps(s, ensure_ascii=False) + ")")
+            # Push is gone on purpose: the page PULLS state via get_state()
+            # (API calls run on WebView2's own thread pool: they can never
+            # wedge the UI thread). The updater only watches the heartbeat.
+            if state.panel_visible and time.monotonic() - state.last_pull > 8.0:
+                _dbg("watchdog: page silencieuse, reload")
+                state.last_pull = time.monotonic()  # avoid reload storms
+                try:
+                    w.load_url(str(_prepare_boot_page()))
+                except Exception as e:
+                    _dbg(f"watchdog reload: {e!r}")
             if not selfcheck_done and state.panel_visible:
                 selfcheck_done = True
                 try:
@@ -652,7 +666,7 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           "jsVer: window.__APP_JS_VERSION||0,"
                           "grip: !!document.getElementById('grip')})")
                     import re as _re
-                    raw = w.evaluate_js(js)
+                    raw = _js(w, js, timeout=3)
                     d = json.loads(raw)
                     want_banner_hidden = d.get("preview") is None
                     ok = (bool(_re.fullmatch(r"\d{2}:\d{2}:\d{2}", d["countdown"]))
@@ -662,7 +676,7 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           and d["whaleLen"] == 1974
                           and (("peak" in d["appClass"].split()) == ("×1.0" in d["chip"]))
                           and (d["chip"].startswith("PREVIEW") == bool(d.get("preview")))
-                          and d.get("grip") is True and d.get("jsVer", 0) >= 3)
+                          and d.get("grip") is True and d.get("jsVer", 0) >= 4)
                     print("[selfcheck]", json.dumps(d, ensure_ascii=False),
                           "=> VERDICT:", "OK" if ok else "ECHEC", flush=True)
                     if ok and "--selftest" in sys.argv:
@@ -779,6 +793,45 @@ def make_menu():
 
 
 # --------------------------------------------------------------------------- main
+def _dbg(msg: str) -> None:
+    """Best-effort debug log next to config.json (the exe has no console)."""
+    try:
+        with (config_file().parent / "debug.log").open("a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%H:%M:%S} {msg}\n")
+    except Exception:
+        pass
+
+
+_js_seq = 0
+
+
+def _js(w, script, timeout=0.9):
+    """evaluate_js with a hard deadline. A wedged WebView UI thread otherwise
+    blocks the caller forever (this was the 'clock stops on its own' bug).
+    Each attempt runs in its own thread: if it times out, the caller moves on
+    and simply retries on the next tick."""
+    global _js_seq
+    _js_seq += 1
+    seq = _js_seq
+    box = {}
+
+    def _run():
+        try:
+            box["ok"] = w.evaluate_js(script)
+        except Exception as e:
+            box["err"] = e
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        _dbg(f"js #{seq} TIMEOUT ({script[:28]}...)")
+        raise TimeoutError(f"evaluate_js #{seq}")
+    if "err" in box:
+        raise box["err"]
+    return box.get("ok")
+
+
 def _prepare_boot_page() -> Path:
     """Copy of index.html with cache-busting query strings on css/js, so the
     WebView never serves a stale UI after an update."""

@@ -1,8 +1,8 @@
 "use strict";
-window.__APP_JS_VERSION = 3;  // cache-busting diagnostic
+window.__APP_JS_VERSION = 4;  // pull model: page requests state every second
 const $ = (id) => document.getElementById(id);
 
-/* Official DeepSeek whale SVG path (injected by Python from assets/whale_path.txt). */
+/* Official DeepSeek whale SVG path (pulled from Python). */
 window.__setWhale = function (p) {
   $("whalePath").setAttribute("d", p);
 };
@@ -64,6 +64,33 @@ window.__update = function (s) {
 
 document.addEventListener("DOMContentLoaded", () => {
   const api = () => (window.pywebview ? pywebview.api : null);
+
+  /* Pull the whale path once, then the full state every second.
+     While the window is hidden, WebView2 never delivers API replies, so we
+     must NOT touch the API then: the calls would pile up and wedge the
+     bridge (this froze the clock). Resume instantly on show. */
+  function boot() {
+    const a = api();
+    if (!a) { setTimeout(boot, 250); return; }
+    if (typeof a.get_whale === "function" && !document.hidden) {
+      Promise.resolve(a.get_whale()).then((p) => { if (p) window.__setWhale(p); })
+        .catch(() => {});
+    }
+    tick();
+    setInterval(tick, 1000);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) tick();
+  });
+  function tick() {
+    if (document.hidden) return;
+    const a = api();
+    if (!a || typeof a.get_state !== "function") return;
+    Promise.resolve(a.get_state()).then((s) => {
+      if (s && s.version) window.__update(s);
+    }).catch(() => {});
+  }
+  boot();
 
   $("closeBtn").addEventListener("click", () => { const a = api(); if (a) a.close_panel(); });
   $("exitPreview").addEventListener("click", () => { const a = api(); if (a) a.set_preview(""); });
