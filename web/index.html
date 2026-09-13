@@ -57,6 +57,32 @@
       <div class="legend"><span class="sw sw-peak"></span>peak&nbsp;<span class="sw sw-off"></span>off-peak</div>
     </section>
 
+    <section class="card" id="balanceCard">
+      <div class="row">
+        <span class="label">Account balance</span>
+        <button id="balanceAction" class="mini-btn">Enter API key</button>
+      </div>
+      <div id="balanceBody" class="balance-body" hidden>
+        <div id="balanceRows"></div>
+        <div class="balance-foot">
+          <span id="balanceTime">—</span>
+          <button id="balanceRefresh" class="mini-btn">Refresh</button>
+        </div>
+      </div>
+      <div id="balanceErr" class="balance-err" hidden>—</div>
+      <div id="keyEditor" hidden>
+        <input id="keyInput" type="password" placeholder="Paste your DeepSeek API key (sk-…)" spellcheck="false" autocomplete="off">
+        <div class="key-row">
+          <button id="keySave" class="mini-btn primary">Save</button>
+          <button id="keyCancel" class="mini-btn">Cancel</button>
+          <button id="keyRemove" class="mini-btn danger">Remove key</button>
+        </div>
+        <div class="hint">Stored in Windows Credential Manager (never in a file).
+          The app calls <code>GET /user/balance</code> only — it costs nothing.
+          Without a key, no request is ever made.</div>
+      </div>
+    </section>
+
     <section class="card settings">
       <div class="label">Preview <small>(display only)</small></div>
       <div class="pills" id="pills">

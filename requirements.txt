@@ -10,4 +10,5 @@ svgpath2mpl
 matplotlib
 tzdata
 numpy==1.26.4
+keyring
 pyinstaller

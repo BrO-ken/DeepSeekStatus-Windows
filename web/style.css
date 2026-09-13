@@ -138,6 +138,42 @@ main::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:99p
 .sw-peak{background:#4D6BFE}
 .sw-off{background:rgba(255,255,255,.12)}
 
+/* -------------------------------------------------- balance card */
+.mini-btn{
+  border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--text);
+  font-size:11px;padding:4px 11px;border-radius:8px;cursor:pointer;font-family:inherit;
+  white-space:nowrap;
+}
+.mini-btn:hover{background:rgba(255,255,255,.12)}
+.mini-btn:disabled{opacity:.45;cursor:default}
+.mini-btn.primary{background:var(--accent-soft);border-color:rgba(77,107,254,.55);color:#DCE4FF}
+.mini-btn.danger{color:#FFB4AB;border-color:rgba(255,80,80,.35)}
+.balance-body{margin-top:8px}
+.bal-row{display:flex;align-items:baseline;gap:8px;margin:3px 0}
+.bal-amount{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.bal-split{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.bal-load{color:var(--muted);font-size:12px;padding:6px 0}
+.bal-warn{margin-top:6px;font-size:11px;color:#FFD966;background:rgba(255,193,7,.12);
+  border:1px solid rgba(255,193,7,.35);padding:4px 9px;border-radius:8px}
+.balance-foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+.balance-foot span{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.balance-err{margin-top:8px;font-size:12px;color:#FFB4AB;
+  background:rgba(255,80,80,.08);border:1px solid rgba(255,80,80,.25);
+  padding:6px 10px;border-radius:9px}
+#keyEditor{margin-top:9px}
+#keyInput{
+  width:100%;box-sizing:border-box;padding:8px 11px;border-radius:9px;
+  border:1px solid var(--border);background:rgba(0,0,0,.35);color:var(--text);
+  font-size:12px;font-family:inherit;outline:none;
+}
+#keyInput:focus{border-color:rgba(77,107,254,.6)}
+#keyInput[hidden]{display:none}
+.key-row{display:flex;gap:8px;margin-top:8px}
+.key-row .mini-btn{flex:0 0 auto}
+#keyRemove{margin-left:auto}
+#keyEditor .hint{margin-top:8px}
+#keyEditor code{color:var(--muted);font-family:Consolas,monospace;font-size:11px}
+
 /* ---------------------------------------------------- settings */
 .pills{display:flex;gap:8px;margin:9px 0 11px}
 .pills button{

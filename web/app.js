@@ -1,5 +1,5 @@
 "use strict";
-window.__APP_JS_VERSION = 4;  // pull model: page requests state every second
+window.__APP_JS_VERSION = 5;  // + balance card
 const $ = (id) => document.getElementById(id);
 
 /* Official DeepSeek whale SVG path (pulled from Python). */
@@ -32,6 +32,48 @@ function buildWeek(week) {
   weekBuilt = true;
 }
 
+/* Account balance card. `editing` keeps the key editor open across pulls. */
+let editing = false;
+function renderBalance(bal) {
+  bal = bal || {};
+  const act = $("balanceAction"), body = $("balanceBody"), err = $("balanceErr"),
+        ed = $("keyEditor"), inp = $("keyInput"), rem = $("keyRemove");
+  ed.hidden = !editing;
+  inp.hidden = !editing;
+  rem.hidden = !editing || !bal.hasKey;
+  act.textContent = bal.hasKey ? "Change key" : "Enter API key";
+  err.hidden = !bal.error || editing;
+  if (!err.hidden) err.textContent = (bal.suggestsRekey ? "\u26A0 " : "") + bal.error;
+  const show = bal.hasKey && !editing;
+  body.hidden = !show;
+  if (show) {
+    const rows = $("balanceRows");
+    rows.innerHTML = "";
+    if (bal.state === "loading" && !bal.infos.length) {
+      const d = document.createElement("div");
+      d.className = "bal-load"; d.textContent = "Loading\u2026";
+      rows.appendChild(d);
+    } else {
+      bal.infos.forEach((i) => {
+        const d = document.createElement("div"); d.className = "bal-row";
+        const a = document.createElement("span"); a.className = "bal-amount";
+        a.textContent = i.symbol + i.total;
+        const sp = document.createElement("span"); sp.className = "bal-split";
+        sp.textContent = "\u2014 " + i.currency + " \u00B7 granted " + i.symbol + i.granted
+          + " \u00B7 topped-up " + i.symbol + i.toppedUp;
+        d.appendChild(a); d.appendChild(sp); rows.appendChild(d);
+      });
+      if (bal.infos.length && bal.isAvailable === false) {
+        const w = document.createElement("div"); w.className = "bal-warn";
+        w.textContent = "Balance exhausted \u2014 API calls will fail.";
+        rows.appendChild(w);
+      }
+      const ft = $("balanceTime");
+      ft.textContent = bal.lastOk ? "updated " + bal.lastOk : "never refreshed";
+    }
+  }
+}
+
 /* State pushed every second by Python (single source of truth). */
 window.__update = function (s) {
   window.__state = s;
@@ -58,6 +100,7 @@ window.__update = function (s) {
     b.classList.toggle("active", (b.dataset.mode || null) === s.preview);
   });
   $("previewBanner").hidden = !s.preview;
+  renderBalance(s.balance);
   const lt = $("loginToggle");
   if (lt.checked !== s.launchAtLogin) lt.checked = s.launchAtLogin;
 };
@@ -103,9 +146,35 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape") { const a = api(); if (a) a.close_panel(); }
   });
 
-  /* Hide the panel as soon as it loses focus: the tray whale keeps running
-     in the background and clicking it brings the panel back. */
+  /* ---- balance / API key editor ---- */
+  $("balanceAction").addEventListener("click", () => { editing = true; renderBalance(window.__state && window.__state.balance); });
+  $("balanceRefresh").addEventListener("click", () => { const a = api(); if (a) a.refresh_balance(); });
+  $("keyCancel").addEventListener("click", () => { editing = false; $("keyInput").value = ""; renderBalance(window.__state && window.__state.balance); });
+  $("keySave").addEventListener("click", saveKey);
+  $("keyRemove").addEventListener("click", () => {
+    const a = api();
+    if (!a) return;
+    Promise.resolve(a.remove_api_key()).then(() => {
+      editing = false; $("keyInput").value = "";
+    });
+  });
+  $("keyInput").addEventListener("keydown", (e) => { if (e.key === "Enter") saveKey(); });
+  function saveKey() {
+    const a = api();
+    const v = $("keyInput").value.trim();
+    if (!a || !v) return;
+    $("keySave").disabled = true;
+    Promise.resolve(a.set_api_key(v)).then((ok) => {
+      $("keySave").disabled = false;
+      if (ok) { editing = false; $("keyInput").value = ""; }
+      else { $("keyInput").placeholder = "Could not save (Credential Manager refused). Try again."; }
+    }).catch(() => { $("keySave").disabled = false; });
+  }
+
+  /* Hide the panel as soon as it loses focus — EXCEPT while editing the key
+     (the input's context menu / paste flow can fire a spurious blur). */
   window.addEventListener("blur", () => {
+    if (editing) return;
     const a = api();
     if (a) a.close_panel();
   });

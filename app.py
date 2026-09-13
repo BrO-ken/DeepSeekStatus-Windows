@@ -25,9 +25,10 @@ from PIL import Image
 
 from schedule import (BEIJING, OFF, PEAK, next_transition, period_at,
                       previous_boundary, progress, week_matrix)
+from balance import BalanceStore
 
 APP_TITLE = "DeepSeek Status"
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 MUTEX_NAME = "DeepSeekStatusWin_Mutex"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VAL = "DeepSeekStatusWin"
@@ -67,6 +68,7 @@ class State:
 
 
 state = State()
+store = BalanceStore()
 window = None  # créé dans main()
 
 
@@ -198,6 +200,7 @@ def open_panel(w) -> None:
     w.show()
     # Fresh heartbeat: avoid a bogus watchdog reload on the first seconds open.
     state.last_pull = time.monotonic()
+    store.refresh_if_stale()
     # pywebview n'applique resize/move correctement qu'une fois la fenêtre montrée.
     try:
         w.events.shown.wait(5)
@@ -578,6 +581,18 @@ class Api:
         save_config(cfg)
         return on == get_launch_at_login()
 
+    # ---- balance / API key -------------------------------------------------
+    def set_api_key(self, key):
+        return store.set_key(str(key or ""))
+
+    def remove_api_key(self):
+        store.remove_key()
+        return True
+
+    def refresh_balance(self):
+        store.refresh()
+        return True
+
 
 # ----------------------------------------------------------------- état → UI/tray
 def build_state(now: datetime) -> dict:
@@ -615,6 +630,7 @@ def build_state(now: datetime) -> dict:
         "curDay": bj.weekday(),
         "curHour": bj.hour,
         "launchAtLogin": state.launch_at_login,
+        "balance": store.snapshot(),
     }
 
 
@@ -657,7 +673,9 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                 selfcheck_done = True
                 try:
                     js = ("JSON.stringify({"
-                          "chip: document.getElementById('chip').textContent,"
+                      "chip: document.getElementById('chip').textContent,"
+                      "balanceCard: !!document.getElementById('balanceCard'),"
+                      "balanceBtn: document.getElementById('balanceAction').textContent,"
                           "countdown: document.getElementById('countdown').textContent,"
                           "nextAt: document.getElementById('nextAt').textContent,"
                           "nextLabel: document.getElementById('nextLabel').textContent,"
@@ -671,6 +689,7 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           "tz: document.getElementById('tzNote').textContent,"
                           "ver: document.getElementById('ver').textContent,"
                           "preview: (window.__state||{}).preview,"
+                          "balance: (window.__state||{}).balance,"
                           "jsVer: window.__APP_JS_VERSION||0,"
                           "grip: !!document.getElementById('grip')})")
                     import re as _re
@@ -684,7 +703,11 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                           and d["whaleLen"] == 1974
                           and (("peak" in d["appClass"].split()) == ("×1.0" in d["chip"]))
                           and (d["chip"].startswith("PREVIEW") == bool(d.get("preview")))
-                          and d.get("grip") is True and d.get("jsVer", 0) >= 4)
+                          and d.get("grip") is True and d.get("jsVer", 0) >= 5
+                          and d.get("balanceCard") is True
+                          and d.get("balanceBtn") == (
+                              "Change key" if (d.get("balance") or {}).get("hasKey")
+                              else "Enter API key"))
                     print("[selfcheck]", json.dumps(d, ensure_ascii=False),
                           "=> VERDICT:", "OK" if ok else "ECHEC", flush=True)
                     if ok and "--selftest" in sys.argv:
@@ -740,6 +763,7 @@ def updater(w, icon, loaded: threading.Event, open_now: bool) -> None:
                 last_icon_key = key
             icon.title = tooltip_for(real, s["countdown"], next_transition(now).astimezone(BEIJING))
             _sync_size_from_window()
+            store.tick()  # 5-minute auto refresh when a key is saved
             # Hermes (fullscreen) keeps burying the panel: re-assert TOPMOST
             # every second while visible. Blur-hide still hides it the moment
             # the user clicks elsewhere, so it never blocks other apps.
@@ -900,6 +924,7 @@ def main() -> None:
     threading.Thread(target=icon.run, daemon=True).start()
 
     open_now = bool(cfg.get("open_panel_on_start")) or ("--show" in sys.argv)
+    store.start()
     webview.start(updater, args=(window, icon, loaded, open_now), gui="edgechromium")
 
 

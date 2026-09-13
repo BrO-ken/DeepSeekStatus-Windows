@@ -34,13 +34,20 @@ Source: [api-docs.deepseek.com/quick_start/pricing](https://api-docs.deepseek.co
 - Panel (left-click the whale): animated aquarium (swimming / sleeping whale), giant countdown,
   progress through the current block, ×1.0 / ×0.5 price bars, **7×24 weekly heat map**,
   timezone note.
+- 💰 **Account balance** (opt-in): paste a DeepSeek API key once and the panel shows your
+  balance (total + granted / topped-up per currency), refreshed every 5 minutes and when the
+  panel opens. The key is stored in the **Windows Credential Manager** (encrypted per user —
+  never in a file), and the only endpoint ever called is `GET /user/balance` (free to call).
+  **Without a key, no request is ever made.** “Remove key” deletes it from the vault.
 - **Resizable panel**: grab any edge or corner and drag — native live resizing
   with no visible frame (the ◢ mark shows the diagonal spot). Minimum 300×320,
   size remembered across sessions.
 - **Preview mode**: force the peak / off-peak display (never affects the real computation).
 - **Start with Windows** (opt-in, `HKCU\...\Run`).
 - The panel hides itself when it loses focus — the tray whale keeps running in the background.
-- Single instance, no network access, no account, no data collection.
+- Single instance, no analytics, no data collection. Network use is **opt-in and minimal**:
+  with no API key saved, no request is ever made (pure local clock). With a key, only
+  `GET /user/balance` is called.
 
 ## Usage
 
@@ -64,6 +71,16 @@ venv\Scripts\python tests\test_schedule.py
 42 checks: boundaries 08:59/09:00/11:59/12:00/13:59/14:00/17:59/18:00, weekends,
 the Friday-evening-to-Monday-morning span, timezone independence (UTC/New York/Tokyo),
 hour-by-hour conformance with the official UTC rule, progress through the block.
+
+Balance logic (offline, mocked network):
+
+```
+venv\Scripts\python tests\test_balance.py
+```
+
+12 checks: no-key = no request, USD/CNY parsing, 401 handling, stale-response
+discarding after a key change, 5-minute refresh policy, real Credential-Manager
+round-trip (save / read / delete).
 
 ## Build the executable
 
